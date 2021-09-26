@@ -82,8 +82,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import org.bouncycastle.asn1.ASN1Encodable;
 import org.bouncycastle.asn1.ASN1EncodableVector;
 import org.bouncycastle.asn1.ASN1Encoding;
@@ -107,6 +105,7 @@ import org.bouncycastle.asn1.DERUTCTime;
 import org.bouncycastle.asn1.cms.Attribute;
 import org.bouncycastle.asn1.cms.AttributeTable;
 import org.bouncycastle.asn1.cms.ContentInfo;
+import org.bouncycastle.asn1.gm.GMObjectIdentifiers;
 import org.bouncycastle.asn1.ocsp.BasicOCSPResponse;
 import org.bouncycastle.asn1.ocsp.OCSPObjectIdentifiers;
 import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
@@ -209,6 +208,7 @@ public class PdfPKCS7 {
         digestNames.put("1.3.36.3.3.1.3", "RIPEMD128");
         digestNames.put("1.3.36.3.3.1.2", "RIPEMD160");
         digestNames.put("1.3.36.3.3.1.4", "RIPEMD256");
+        digestNames.put(GMObjectIdentifiers.sm3.getId(),"SM3");
 
         algorithmNames.put("1.2.840.113549.1.1.1", "RSA");
         algorithmNames.put("1.2.840.10040.4.1", "DSA");
@@ -225,6 +225,7 @@ public class PdfPKCS7 {
         algorithmNames.put("1.3.36.3.3.1.3", "RSA");
         algorithmNames.put("1.3.36.3.3.1.2", "RSA");
         algorithmNames.put("1.3.36.3.3.1.4", "RSA");
+        algorithmNames.put(GMObjectIdentifiers.sm2sign_with_sm3.getId(), "SM2");
 
         allowedDigests.put("MD5", "1.2.840.113549.2.5");
         allowedDigests.put("MD2", "1.2.840.113549.2.2");
@@ -246,6 +247,7 @@ public class PdfPKCS7 {
         allowedDigests.put("RIPEMD-160", "1.3.36.3.2.1");
         allowedDigests.put("RIPEMD256", "1.3.36.3.2.3");
         allowedDigests.put("RIPEMD-256", "1.3.36.3.2.3");
+        allowedDigests.put("SM3", GMObjectIdentifiers.sm3.getId());
     }
 
     /**
@@ -273,16 +275,6 @@ public class PdfPKCS7 {
     }
 
     /**
-     * Gets the oid for given digest name.
-     *
-     * @param digestName digest name (for instance "SHA-256")
-     * @return a digest OID (for instance "2.16.840.1.101.3.4.2.1") or {@code null} if the oid for provided name is not found
-     */
-    public static String getDigestOid(String digestName) {
-        return digestName != null ? allowedDigests.get(digestName) : null;
-    }
-
-    /**
      * Gets the timestamp token if there is one.
      *
      * @return the timestamp token or null
@@ -298,7 +290,6 @@ public class PdfPKCS7 {
      * @return a date
      * @since 2.1.6
      */
-    @Nullable
     public Calendar getTimeStampDate() {
         if (timeStampToken == null)
             return null;
@@ -458,8 +449,8 @@ public class PdfPKCS7 {
 
             int next = 3;
             while (content.getObjectAt(next) instanceof ASN1TaggedObject)
-            	++next;
-            
+                ++next;
+
             // the signerInfos
             ASN1Set signerInfos = (ASN1Set) content.getObjectAt(next);
             if (signerInfos.size() != 1)
@@ -494,6 +485,9 @@ public class PdfPKCS7 {
                                 serialNumber.toString(16)));
             }
             signCertificateChain();
+
+
+
             digestAlgorithm = ((ASN1ObjectIdentifier) ((ASN1Sequence) signerInfo
                     .getObjectAt(2)).getObjectAt(0)).getId();
             next = 3;
@@ -532,7 +526,7 @@ public class PdfPKCS7 {
                     .getObjectAt(next++)).getObjectAt(0)).getId();
             digest = ((DEROctetString) signerInfo.getObjectAt(next++)).getOctets();
             if (next < signerInfo.size() && (signerInfo.getObjectAt(next) instanceof ASN1TaggedObject)) {
-            	ASN1TaggedObject taggedObject = (ASN1TaggedObject) signerInfo.getObjectAt(next);
+                ASN1TaggedObject taggedObject = (ASN1TaggedObject) signerInfo.getObjectAt(next);
                 ASN1Set unat = ASN1Set.getInstance(taggedObject, false);
                 AttributeTable attble = new AttributeTable(unat);
                 Attribute ts = attble.get(PKCSObjectIdentifiers.id_aa_signatureTimeStampToken);
@@ -559,6 +553,10 @@ public class PdfPKCS7 {
             throw new ExceptionConverter(e);
         }
     }
+//
+//    private String resolveDigestAlgorithmOid(String algorithm){
+//
+//    }
 
     /**
      * Generates a signature.
@@ -636,6 +634,55 @@ public class PdfPKCS7 {
         }
     }
 
+    public PdfPKCS7(Certificate[] certChain, CRL[] crlList,
+                    String digestEncryptionAlgorithm,
+                    String hashAlgorithm, String provider, boolean hasRSAdata)
+            throws InvalidKeyException, NoSuchProviderException,
+            NoSuchAlgorithmException {
+        this.provider = provider;
+
+        digestAlgorithm = allowedDigests.get(hashAlgorithm.toUpperCase());
+        if (digestAlgorithm == null)
+            throw new NoSuchAlgorithmException(
+                    MessageLocalization.getComposedMessage("unknown.hash.algorithm.1",
+                            hashAlgorithm));
+
+        version = signerversion = 1;
+        certs = new ArrayList<>();
+        crls = new ArrayList<>();
+        digestalgos = new HashSet<>();
+        digestalgos.add(digestAlgorithm);
+
+        //
+        // Copy in the certificates and crls used to sign the private key.
+        //
+        signCert = (X509Certificate) certChain[0];
+        certs.addAll(Arrays.asList(certChain));
+
+        if (crlList != null) {
+            crls.addAll(Arrays.asList(crlList));
+        }
+
+        this.digestEncryptionAlgorithm = digestEncryptionAlgorithm;
+
+        if (hasRSAdata) {
+            RSAdata = new byte[0];
+            if (provider == null || provider.startsWith("SunPKCS11"))
+                messageDigest = MessageDigest.getInstance(getStandardJavaName(getHashAlgorithm()));
+            else
+                messageDigest = MessageDigest.getInstance(getStandardJavaName(getHashAlgorithm()), provider);
+        }
+
+        if (privKey != null) {
+            if (provider == null)
+                sig = Signature.getInstance(getDigestAlgorithm());
+            else
+                sig = Signature.getInstance(getDigestAlgorithm(), provider);
+
+            sig.initSign(privKey);
+        }
+    }
+
     /**
      * Update the digest with the specified bytes. This method is used both for
      * signing and verifying
@@ -683,7 +730,7 @@ public class PdfPKCS7 {
      * Checks if the timestamp refers to this document.
      *
      * @return true if it checks false otherwise
-     * @throws java.security.NoSuchAlgorithmException on error
+     * @throws NoSuchAlgorithmException on error
      * @since 2.1.6
      */
     public boolean verifyTimestampImprint() throws NoSuchAlgorithmException {
@@ -1074,7 +1121,6 @@ public class PdfPKCS7 {
         return false;
     }
 
-    @Nullable
     private static ASN1Primitive getExtensionValue(X509Certificate cert,
                                                    String oid) throws IOException {
         byte[] bytes = cert.getExtensionValue(oid);
@@ -1087,9 +1133,8 @@ public class PdfPKCS7 {
         return aIn.readObject();
     }
 
-    @Nonnull
     private static String getStringFromGeneralName(ASN1Primitive names) {
-       	ASN1TaggedObject taggedObject = (ASN1TaggedObject) names ;
+        ASN1TaggedObject taggedObject = (ASN1TaggedObject) names ;
         return new String(ASN1OctetString.getInstance(taggedObject, false)
                 .getOctets(), StandardCharsets.ISO_8859_1);
     }
@@ -1198,10 +1243,13 @@ public class PdfPKCS7 {
                 this.digestEncryptionAlgorithm = ID_RSA;
             } else if (digestEncryptionAlgorithm.equals("DSA")) {
                 this.digestEncryptionAlgorithm = ID_DSA;
-            } else
+            } else if(digestEncryptionAlgorithm.equals("SM2")){
+                this.digestEncryptionAlgorithm = GMObjectIdentifiers.sm2sign_with_sm3.getId();
+            } else {
                 throw new ExceptionConverter(new NoSuchAlgorithmException(
                         MessageLocalization.getComposedMessage("unknown.key.algorithm.1",
                                 digestEncryptionAlgorithm)));
+            }
         }
     }
 
@@ -1350,7 +1398,7 @@ public class PdfPKCS7 {
 
             ByteArrayOutputStream bOut = new ByteArrayOutputStream();
 
-            ASN1OutputStream dout = new ASN1OutputStream(bOut);
+            ASN1OutputStream dout = ASN1OutputStream.create(bOut);
             dout.writeObject(new DERSequence(whole));
             dout.close();
 
@@ -1555,27 +1603,27 @@ public class PdfPKCS7 {
         this.signName = signName;
     }
 
-    
+
     private static String getStandardJavaName(String algName) {
-    	if ("SHA1".equals(algName)) {
-    		return "SHA-1";
-    	}
-    	if ("SHA224".equals(algName)) {
-    		return "SHA-224";
-    	}
-    	if ("SHA256".equals(algName)) {
-    		return "SHA-256";
-    	}
-    	if ("SHA384".equals(algName)) {
-    		return "SHA-384";
-    	}
-    	if ("SHA512".equals(algName)) {
-    		return "SHA-512";
-    	}
-    	return algName;
+        if ("SHA1".equals(algName)) {
+            return "SHA-1";
+        }
+        if ("SHA224".equals(algName)) {
+            return "SHA-224";
+        }
+        if ("SHA256".equals(algName)) {
+            return "SHA-256";
+        }
+        if ("SHA384".equals(algName)) {
+            return "SHA-384";
+        }
+        if ("SHA512".equals(algName)) {
+            return "SHA-512";
+        }
+        return algName;
 
     }
-    
+
     /**
      * a class that holds an X509 name
      */
@@ -1763,7 +1811,6 @@ public class PdfPKCS7 {
 
         }
 
-        @Nullable
         public String getField(String name) {
             List<String> vs = valuesMap.get(name);
             return vs == null ? null : vs.get(0);
@@ -1813,7 +1860,7 @@ public class PdfPKCS7 {
 
         /**
          * @return values string representation
-         * @see java.lang.Object#toString()
+         * @see Object#toString()
          */
         @Override
         public String toString() {
